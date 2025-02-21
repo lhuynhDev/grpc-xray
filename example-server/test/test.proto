@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package test;
+
+option go_package = "example.com/example-server/test";
+
+// Enum example
+enum UserType {
+  UNKNOWN = 0;
+  ADMIN = 1;
+  MEMBER = 2;
+}
+
+// Nested message
+message Profile {
+  string email = 1;
+  int32 age = 2;
+}
+
+// Main request message
+message UserRequest {
+  int32 id = 1;
+  string name = 2;
+  bool active = 3;
+  double balance = 4;
+  bytes avatar = 5;
+  Profile profile = 6;  // Nested message
+  repeated string tags = 7;  // List of strings
+  map<string, string> metadata = 8;  // Map
+  UserType type = 9;  // Enum
+}
+
+// Response message
+message UserResponse {
+  string message = 1;
+}
+
+// gRPC Service
+service UserService {
+  rpc CreateUser(UserRequest) returns (UserResponse);
+}
