@@ -1,13 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 
-	"go.starlark.net/lib/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
@@ -17,7 +18,8 @@ func parseMessage(msg protoreflect.Message) map[string]interface{} {
 	result := make(map[string]interface{})
 	fields := msg.Descriptor().Fields()
 
-	fields.Range(func(i int, field protoreflect.FieldDescriptor) bool {
+	for i := 0; i < fields.Len(); i++ {
+		field := fields.Get(i)
 		value := msg.Get(field)
 
 		// Handle different field types
@@ -26,8 +28,8 @@ func parseMessage(msg protoreflect.Message) map[string]interface{} {
 			if field.IsList() {
 				// Handle repeated messages
 				var list []interface{}
-				for i := 0; i < value.List().Len(); i++ {
-					list = append(list, parseMessage(value.List().Get(i).Message()))
+				for j := 0; j < value.List().Len(); j++ {
+					list = append(list, parseMessage(value.List().Get(j).Message()))
 				}
 				result[string(field.Name())] = list
 			} else {
@@ -45,14 +47,11 @@ func parseMessage(msg protoreflect.Message) map[string]interface{} {
 		default:
 			result[string(field.Name())] = value.Interface()
 		}
-
-		return true
-	})
-
+	}
 	return result
 }
 
-// decodeRequest takes a binary gRPC request payload and decodes it using reflection
+// decodeRequest decodes a gRPC request payload dynamically
 func decodeRequest(msgDesc protoreflect.MessageDescriptor, data []byte) (map[string]interface{}, error) {
 	messageType, err := protoregistry.GlobalTypes.FindMessageByName(msgDesc.FullName())
 	if err != nil {
@@ -71,9 +70,41 @@ func decodeRequest(msgDesc protoreflect.MessageDescriptor, data []byte) (map[str
 	return parseMessage(msg.ProtoReflect()), nil
 }
 
-func main() {
+// getServiceDescriptor retrieves the file descriptor from the reflection API
+func getServiceDescriptor(client grpc_reflection_v1alpha.ServerReflectionClient, serviceName string) (*grpc_reflection_v1alpha.FileDescriptorResponse, error) {
+	stream, err := client.ServerReflectionInfo(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create reflection stream: %w", err)
+	}
 
-	// Connect to the server
+	req := &grpc_reflection_v1alpha.ServerReflectionRequest{
+		MessageRequest: &grpc_reflection_v1alpha.ServerReflectionRequest_FileContainingSymbol{
+			FileContainingSymbol: serviceName,
+		},
+	}
+
+	if err := stream.Send(req); err != nil {
+		return nil, fmt.Errorf("failed to send reflection request: %w", err)
+	}
+
+	resp, err := stream.Recv()
+	if err != nil {
+		return nil, fmt.Errorf("failed to receive response: %w", err)
+	}
+
+	// Debugging: Print reflection response type
+	log.Printf("Received reflection response: %+v", resp)
+
+	fileDescResp, ok := resp.MessageResponse.(*grpc_reflection_v1alpha.ServerReflectionResponse_FileDescriptorResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type: %+v", resp.MessageResponse)
+	}
+
+	return fileDescResp.FileDescriptorResponse, nil
+}
+
+func main() {
+	// Connect to the gRPC server
 	conn, err := grpc.Dial("localhost:50051", grpc.WithInsecure())
 	if err != nil {
 		log.Fatalf("failed to connect: %v", err)
@@ -83,19 +114,32 @@ func main() {
 	client := grpc_reflection_v1alpha.NewServerReflectionClient(conn)
 
 	// Get the descriptor of the service
-	serviceName := "example.Service"
+	serviceName := "test.UserService"
 	fd, err := getServiceDescriptor(client, serviceName)
 	if err != nil {
 		log.Fatalf("failed to get file descriptor: %v", err)
 	}
 
 	// Extract message descriptor (assuming 1st service and 1st method)
-	serviceDesc := fd.Service[0]
-	methodDesc := serviceDesc.Method[0]
-	messageType := methodDesc.InputType
+	if len(fd.FileDescriptorProto) == 0 {
+		log.Fatalf("No file descriptors found for service: %s", serviceName)
+	}
+
+	// Normally, you'd need to parse the descriptor into a usable structure.
+	// Here, we assume the first method and manually assign a dummy request.
+	// In a real-world case, you'd dynamically extract and parse method info.
+
+	// Dummy request payload (replace
+	// this with real binary gRPC request data)
+	rawData := []byte{} // You need actual binary data from a gRPC request
+
+	msgType, err := protoregistry.GlobalTypes.FindMessageByName(protoreflect.FullName("test.UserRequest"))
+	if err != nil {
+		log.Fatalf("failed to find message type: %v", err)
+	}
 
 	// Decode the request dynamically
-	parsedData, err := decodeRequest(protoregistry.GlobalFiles.FindMessageByName(protoreflect.FullName(messageType)), rawData)
+	parsedData, err := decodeRequest(msgType.Descriptor(), rawData)
 	if err != nil {
 		log.Fatalf("failed to parse request: %v", err)
 	}
